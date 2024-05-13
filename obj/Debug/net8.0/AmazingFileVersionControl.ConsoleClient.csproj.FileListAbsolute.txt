@@ -65,3 +65,4 @@ C:\Users\David\Documents\Visual Studio Projects\AmazingFileVersionControl\Amazin
 C:\Users\David\Documents\Visual Studio Projects\AmazingFileVersionControl\AmazingFileVersionControl.ConsoleClient\bin\Debug\net8.0\Microsoft.Net.Http.Headers.dll
 C:\Users\David\Documents\Visual Studio Projects\AmazingFileVersionControl\AmazingFileVersionControl.ConsoleClient\bin\Debug\net8.0\System.IO.Pipelines.dll
 C:\Users\David\Documents\Visual Studio Projects\AmazingFileVersionControl\AmazingFileVersionControl.ConsoleClient\bin\Debug\net8.0\Newtonsoft.Json.dll
+C:\Users\David\Documents\Visual Studio Projects\AmazingFileVersionControl\AmazingFileVersionControl.ConsoleClient\obj\Debug\net8.0\AmazingFileVersionControl.ConsoleClient.sourcelink.json
