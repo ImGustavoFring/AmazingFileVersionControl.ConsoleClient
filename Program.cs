@@ -1,226 +1,91 @@
-﻿using AmazingFileVersionControl.ApiClients;
-using AmazingFileVersionControl.Core.DTOs.FileDTOs;
-using System;
+﻿using System;
 using System.IO;
-using System.Text;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
-using AmazingFileVersionControl.ApiClients.ApiClients;
-using AmazingFileVersionControl.ApiClients.Helpers;
+using AmazingFileVersionControl.ApiClients;
 using AmazingFileVersionControl.Core.DTOs.AuthDTOs;
-using Microsoft.AspNetCore.Http.Internal;
+using AmazingFileVersionControl.Core.DTOs.FileDTOs;
+using Microsoft.AspNetCore.Http;
+using MongoDB.Bson;
+using MongoDB.Driver.GridFS;
 
-namespace AmazingFileVersionControl.ConsoleClient
+namespace ConsoleApp
 {
-    public class TestFileController
+    class Program
     {
-        private readonly FileApiClient _fileClient;
-
-        public TestFileController(FileApiClient fileClient)
-        {
-            _fileClient = fileClient;
-        }
-
         static async Task Main(string[] args)
         {
-            var authBaseUrl = "http://localhost:5000/api/UserAuth";
-            var fileBaseUrl = "http://localhost:5000/api/file";
+            var baseAddress = "http://localhost:5000/";
 
-            var authClient = new AuthApiClient(authBaseUrl);
-            var fileClient = new FileApiClient(fileBaseUrl);
+            using var httpClient = new HttpClient { BaseAddress = new Uri(baseAddress) };
 
-            string user1Token = await RegisterAndLoginUser(authClient, "user1", "user1@example.com", "securepassword");
-            await Console.Out.WriteLineAsync($"User1 token: {user1Token}");
+            var authClient = new AuthClient(httpClient);
+            var fileClient = new FileClient(httpClient);
 
-            var testFileController = new TestFileController(fileClient);
+            var loginDto = new LoginDto
+            {
+                Login = "testuser",
+                Password = "TestPassword123"
+            };
 
-            await testFileController.RunFileTests(user1Token);
+            var token = await authClient.LoginAsync(loginDto);
+            Console.WriteLine("Вход успешен. Токен: " + token);
+
+            httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            // Путь к файлу R_1.stl
+            var filePath = @"C:\Users\David\Downloads\R_1.stl";
+            var fileUploadDto = new FileUploadDTO
+            {
+                Name = "R_1.stl",
+                Type = "model/stl",
+                Project = "TestProject",
+                File = new FormFile(new FileStream(filePath, FileMode.Open), new FileInfo(filePath).Length, Path.GetFileName(filePath))
+            };
+
+            var fileId = await fileClient.UploadFileAsync(fileUploadDto);
+            Console.WriteLine("Файл успешно загружен. Идентификатор файла: " + fileId);
+
+            var fileQueryDto = new FileQueryDTO
+            {
+                Name = "R_1.stl",
+                Type = "model/stl",
+                Project = "TestProject"
+            };
+
+            var (stream, fileInfo) = await fileClient.DownloadFileWithMetadataAsync(fileQueryDto);
+            var downloadPath = @"C:\Users\David\Downloads\R_1_downloaded.stl";
+            using (var fileStream = new FileStream(downloadPath, FileMode.Create, FileAccess.Write))
+            {
+                await stream.CopyToAsync(fileStream);
+            }
+            Console.WriteLine("Файл успешно скачан и сохранен в: " + downloadPath);
+            Console.WriteLine("Информация о файле: " + fileInfo.ToJson());
         }
+    }
 
-        private static async Task<string> RegisterAndLoginUser(AuthApiClient authClient, string login, string email, string password)
+    public class FormFile : IFormFile
+    {
+        private readonly Stream _stream;
+
+        public FormFile(Stream stream, long length, string fileName)
         {
-            try
-            {
-                var registerDTO = new RegisterDTO
-                {
-                    Login = login,
-                    Email = email,
-                    Password = password
-                };
-
-                await authClient.RegisterAsync(registerDTO);
-
-                var loginDTO = new LoginDTO
-                {
-                    LoginOrEmail = login,
-                    Password = password
-                };
-                var loginResponse = await authClient.LoginAsync(loginDTO);
-                return TokenHelper.ExtractToken(loginResponse);
-            }
-            catch (Exception ex)
-            {
-                await Console.Out.WriteLineAsync($"Error registering or logging in {login}: {ex.Message}");
-                return string.Empty;
-            }
+            _stream = stream;
+            Length = length;
+            Name = fileName;
+            FileName = fileName;
         }
 
-        public async Task RunFileTests(string userToken)
-        {
-            _fileClient.SetToken(userToken);
+        public string ContentType { get; }
+        public string ContentDisposition { get; }
+        public IHeaderDictionary Headers { get; }
+        public long Length { get; }
+        public string Name { get; }
+        public string FileName { get; }
 
-            // Upload a file
-            await UploadFile("user1", "testfile.txt", "project1", "This is a test file content");
-
-            // Fetch file info
-            await GetFileInfo("testfile.txt", "user1", "project1", -1);
-
-            // Update file info
-            await UpdateFileInfo("testfile.txt", "user1", "project1", 1, "{ \"newKey\": \"newValue\" }");
-
-            // Update all owner files info
-            await UpdateAllOwnerFilesInfo("user1", "{ \"updatedKey\": \"updatedValue\" }");
-
-            // Download the file
-            await DownloadFile("testfile.txt", "user1", "project1", 1);
-
-            // Delete the file
-            await DeleteFile("testfile.txt", "user1", "project1", 1);
-
-            // Delete all files for the user
-            await DeleteAllOwnerFiles("user1");
-        }
-
-        private async Task UploadFile(string owner, string fileName, string project, string fileContent)
-        {
-            try
-            {
-                var fileUploadDTO = new FileUploadDTO
-                {
-                    Name = fileName,
-                    Owner = owner,
-                    Project = project,
-                    Type = "text/plain",
-                    Description = $"{owner}'s file",
-                    File = new FormFile(new MemoryStream(Encoding.UTF8.GetBytes(fileContent)),
-                        0, fileContent.Length, "File", fileName)
-                };
-                var result = await _fileClient.UploadOwnerFileAsync(fileUploadDTO);
-                await Console.Out.WriteLineAsync($"{owner} uploaded {fileName}: {result}");
-            }
-            catch (Exception ex)
-            {
-                await Console.Out.WriteLineAsync($"Error uploading file {fileName} for {owner}: {ex.Message}");
-            }
-        }
-
-        private async Task GetFileInfo(string fileName, string owner, string project, int version)
-        {
-            try
-            {
-                var fileQueryDTO = new FileQueryDTO
-                {
-                    Name = fileName,
-                    Owner = owner,
-                    Project = project,
-                    Version = version
-                };
-                var info = await _fileClient.GetOwnerFileInfoAsync(fileQueryDTO);
-                await Console.Out.WriteLineAsync($"{owner}'s {fileName} info: {info}");
-            }
-            catch (Exception ex)
-            {
-                await Console.Out.WriteLineAsync($"Error getting info for file {fileName} of {owner}: {ex.Message}");
-            }
-        }
-
-        private async Task UpdateFileInfo(string fileName, string owner, string project, int version, string updatedMetadataJson)
-        {
-            try
-            {
-                var fileUpdateDTO = new FileUpdateDTO
-                {
-                    Name = fileName,
-                    Owner = owner,
-                    Project = project,
-                    Version = version,
-                    UpdatedMetadata = updatedMetadataJson
-                };
-                await _fileClient.UpdateOwnerFileInfoAsync(fileUpdateDTO);
-                await Console.Out.WriteLineAsync($"Updated file {fileName} of {owner}");
-            }
-            catch (Exception ex)
-            {
-                await Console.Out.WriteLineAsync($"Error updating file {fileName} of {owner}: {ex.Message}");
-            }
-        }
-
-        private async Task UpdateAllOwnerFilesInfo(string owner, string updatedMetadataJson)
-        {
-            try
-            {
-                await _fileClient.UpdateOwnerAllFilesInfoAsync(owner, updatedMetadataJson);
-                await Console.Out.WriteLineAsync($"Updated all files info for {owner}");
-            }
-            catch (Exception ex)
-            {
-                await Console.Out.WriteLineAsync($"Error updating all files info for {owner}: {ex.Message}");
-            }
-        }
-
-        private async Task DownloadFile(string fileName, string owner, string project, int version)
-        {
-            try
-            {
-                var fileQueryDTO = new FileQueryDTO
-                {
-                    Name = fileName,
-                    Owner = owner,
-                    Project = project,
-                    Version = version
-                };
-                var stream = await _fileClient.DownloadOwnerFileAsync(fileQueryDTO);
-                using var reader = new StreamReader(stream);
-                var content = await reader.ReadToEndAsync();
-                await Console.Out.WriteLineAsync($"{owner}'s {fileName} content: {content}");
-            }
-            catch (Exception ex)
-            {
-                await Console.Out.WriteLineAsync($"Error downloading file {fileName} of {owner}: {ex.Message}");
-            }
-        }
-
-        private async Task DeleteFile(string fileName, string owner, string project, int version)
-        {
-            try
-            {
-                var fileQueryDTO = new FileQueryDTO
-                {
-                    Name = fileName,
-                    Owner = owner,
-                    Project = project,
-                    Version = version
-                };
-                await _fileClient.DeleteOwnerFileAsync(fileQueryDTO);
-                await Console.Out.WriteLineAsync($"{owner}'s file {fileName} deleted");
-            }
-            catch (Exception ex)
-            {
-                await Console.Out.WriteLineAsync($"Error deleting file {fileName} of {owner}: {ex.Message}");
-            }
-        }
-
-        private async Task DeleteAllOwnerFiles(string owner)
-        {
-            try
-            {
-                await _fileClient.DeleteOwnerAllFilesAsync(owner);
-                await Console.Out.WriteLineAsync($"Deleted all files for {owner}");
-            }
-            catch (Exception ex)
-            {
-                await Console.Out.WriteLineAsync($"Error deleting all files for {owner}: {ex.Message}");
-            }
-        }
+        public void CopyTo(Stream target) => _stream.CopyTo(target);
+        public Task CopyToAsync(Stream target, CancellationToken cancellationToken = default) => _stream.CopyToAsync(target, cancellationToken);
+        public Stream OpenReadStream() => _stream;
     }
 }
